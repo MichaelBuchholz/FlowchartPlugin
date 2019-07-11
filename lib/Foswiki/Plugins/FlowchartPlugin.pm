@@ -77,8 +77,6 @@ sub initPlugin {
         'style' => 'stroke:none;fill:#707070;'
     );
     $textSize = 17;
-    $styleText =
-"font-size:${textSize}px;font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;fill:#000000;stroke:none;font-family:Bitstream Vera Sans;text-anchor:middle;writing-mode:lr-tb;";
     $styleLinha =
       'stroke-width:2px;stroke:#000000;stroke-opacity:0.40;fill:none;';
 
@@ -343,6 +341,8 @@ sub encaixaItemRecursive {
         width="' . $caixa{'w'} . '" height="' . $caixa{h} . '"
         style="fill:#' . $color . ';' . $caixa{style} . '" />';
     }
+    $styleText =
+"font-size:${textSize}px;font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;fill:#000000;stroke:none;font-family:Bitstream Vera Sans;text-anchor:middle;writing-mode:lr-tb;";
     $svg .= "\n"
       . '  <text xml:space="preserve" id="text_'
       . $id
