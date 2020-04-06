@@ -21,27 +21,36 @@ package Foswiki::Plugins::FlowchartPlugin;
 
 # =========================
 
-our $VERSION = '1.00';
-our $RELEASE = '26 Mar 2015';
+# This should always be $Rev: 8203 (2010-07-16) $ so that Foswiki can determine the checked-in
+# status of the plugin. It is used by the build automation tools, so
+# you should leave it alone.
+our $VERSION = '$Rev: 8203 (2010-07-16) $';
+
+# This is a free-form string you can use to "name" your own plugin version.
+# It is *not* used by the build automation tools, but is reported as part
+# of the version number in PLUGINDESCRIPTIONS.
+our $RELEASE = '16 Jul 2010';
+
 our $pluginName = 'FlowchartPlugin';    # Name of this Plugin
+
 our $NO_PREFS_IN_TOPIC = 1;    # don't get preferences from plugin topic
 
 our $debug = 0;
-our %fluxItens;
-our $totItens;
-our %caixa;
-our %seta;
-our $textSize;
-our $styleText;
-our $styleLinha;
 
-our $itemPositionDefault;
-our $firstItemId;
-our $lastItemId;
+use JSON;
+#use Data::Dumper;
+use Encode;
+
+#$Data::Dumper::Indent = 1;
+#$Data::Dumper::Terse = 1;
+
+my $user = '';
 
 # =========================
-sub initPlugin {
-    my ( $topic, $web, $user, $installWeb ) = @_;
+sub initPlugin
+{
+    my ( $topic, $web, $usr, $installWeb ) = @_;
+                $user = $usr;
 
     # Get plugin debug flag
     $debug = $Foswiki::cfg{Plugins}{$pluginName}{Debug} || 0;
@@ -51,809 +60,257 @@ sub initPlugin {
         "- Foswiki::Plugins::${pluginName}::initPlugin( $web.$topic ) is OK")
       if $debug;
 
-    # reset defaults
-    %fluxItens = ();
-    $totItens  = 0;
-    %caixa     = (
-        'w'               => 0,
-        'h'               => 0,
-        'areaX'           => 0,
-        'areaY'           => 0,
-        'bigerPosX'       => 1,
-        'bigerPosY'       => 1,
-        'color_start'     => 'c0d8c0',
-        'color_end'       => 'b0b8c0',
-        'color_end-error' => 'e0a0a0',
-        'color_action'    => 'c0d0e0',
-        'color_question'  => 'e0d0c0',
-        'style' =>
-'fill-opacity:1;stroke:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;overflow:visible;'
-    );
-    %seta = (
-        'N'     => "M 5,0 L 0,10 L 5,8 L 10,10 L 5,0 z",
-        'S'     => "M 5,10 L 0,0 L 5,2 L 10,0 L 5,10 z",
-        'L'     => "M 10,5 L 0,0 L 2,5 L 0,10 L 10,5 z",
-        'O'     => "M 0,5 L 10,0 L 8,5 L 10,10 L 0,5 z",
-        'style' => 'stroke:none;fill:#707070;'
-    );
-    $textSize = 17;
-    $styleText =
-"font-size:${textSize}px;font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;fill:#000000;stroke:none;font-family:Bitstream Vera Sans;text-anchor:middle;writing-mode:lr-tb;";
-    $styleLinha =
-      'stroke-width:2px;stroke:#000000;stroke-opacity:0.40;fill:none;';
-
-    $itemPositionDefault = 1;    # will be 1 only to the frist!
-    $firstItemId         = 0;
-    $lastItemId          = 0;
-
     return 1;
 }
 
 # =========================
-sub commonTagsHandler {
+use HTML::Entities;
+
+sub commonTagsHandler
+{
 ### my ( $text, $topic, $web ) = @_;   # do not uncomment, use $_[0], $_[1]... instead
 
-    Foswiki::Func::writeDebug(
-        "- ${pluginName}::commonTagsHandler( $_[2].$_[1] )")
-      if $debug;
+Foswiki::Func::writeDebug ("- ${pluginName}::commonTagsHandler( $_[2].$_[1] )") if $debug;
 
-    # do custom extension rule, like for example:
-    $_[0] =~ s/%FLOWCHART%/&mostraFluxograma($_[0], $_[1], $_[2], '')/ge;
-    $_[0] =~
-      s/%FLOWCHART\{([^\n]*?)\}%/&mostraFluxograma($_[0], $_[1], $_[2], $1)/ge;
-    $_[0] =~ s/\s*%FLOWCHART_BR%\s*/ /g;
-    $_[0] =~ s/%FLOWCHART_START%//g;
-    $_[0] =~ s/%FLOWCHART_STOP%//g;
-}
+# do custom extension rule, like for example:
 
-sub mostraFluxograma {
-    my ( $text, $topic, $web, $params ) = @_;
-    my $myPub  = Foswiki::Func::getPubDir() . "/$web/$topic";
-    my $mapImg = Foswiki::Func::readFile("$myPub/flowchartMapImg_$topic.txt");
+my ($text, $params);
 
-    $style =
-         Foswiki::Func::extractNameValuePair( $params, 'tag-style' )
-      || Foswiki::Func::getPluginPreferencesValue('TAG_STYLE')
-      || 'border:1px dotted #505050;';
+my ($i, $j, $jp, $k, $l, $m, $anchor, $title, $URL);
+my $reattr = join ('|', ( 'id', 'type', 'goto', 'yes', 'no', 'case\s*\\(.*?\\)', 'color', 'alturl' ));
+my $regoto = join ('|', ( 'yes', 'no', 'case\s*\\(.*?\\)' ));
+my %ppfc = ();
+my $fcc = 0;
+my $numfc = 0;
+my %jdata = ();
 
-    return <<"HERE";
-$mapImg <img src="%ATTACHURL%/flowchart_$topic.png" usemap="#flowchart_$topic" style="$style" alt="flowchart_$topic"/>
-HERE
-}
+#my @tt = ();
+while ( (($text, $params) = ($_[0] =~ m/(%FLOWCHART_START(?:{(.*?)})?%.*?%FLOWCHART_STOP%)/s)) )
+        {
+        my ($bm, $am) = ($`, $');
+        my %p = defined ($params) ? Foswiki::Func::extractParameters ($params) : ();
+        my $id = exists ($p{Id}) ? $p{Id} : (exists ($p{_DEFAULT}) ? $p{_DEFAULT} : sprintf ('Flowchart_%d', ++$fcc));
 
-sub desenhaFluxograma {
-    my ( $text, $topic, $web, $params ) = @_;
-    my $myPub = Foswiki::Func::getPubDir() . "/$web/$topic";
-    my $percentReduce;
+        my @t = split ("\n", $text);
 
-    $caixa{'w'} =
-         Foswiki::Func::extractNameValuePair( $params, 'item-w' )
-      || Foswiki::Func::getPluginPreferencesValue('ITEM_WIDTH')
-      || 140;
-    $caixa{'h'} =
-         Foswiki::Func::extractNameValuePair( $params, 'item-h' )
-      || Foswiki::Func::getPluginPreferencesValue('ITEM_HEIGHT')
-      || 40;
-    $caixa{'areaX'} =
-         Foswiki::Func::extractNameValuePair( $params, 'area-w' )
-      || Foswiki::Func::getPluginPreferencesValue('ITEM_AREA_W')
-      || 180;
-    $caixa{'areaY'} =
-         Foswiki::Func::extractNameValuePair( $params, 'area-h' )
-      || Foswiki::Func::getPluginPreferencesValue('ITEM_AREA_H')
-      || 70;
-    $percentReduce =
-         Foswiki::Func::extractNameValuePair( $params, 'percent' )
-      || Foswiki::Func::getPluginPreferencesValue('PERCENT_IMG')
-      || 70;
-    $textSize =
-         Foswiki::Func::extractNameValuePair( $params, 'text-size' )
-      || Foswiki::Func::getPluginPreferencesValue('TEXT_SIZE')
-      || 17;
+        $t[0] =~ s/%FLOWCHART_START(?:{.*?})?%//;
+        $t[$#t] =~ s/%FLOWCHART_STOP%//;
 
-    $text =~ s/.*%FLOWCHART_START%(.*)$/$1/
-      if ( $text =~ m/%FLOWCHART_START%/ );
-    $text =~ s/(.*)%FLOWCHART_STOP%.*$/$1/ if ( $text =~ m/%FLOWCHART_STOP%/ );
-    my ( $id, $title, $goto, $gotoYes, $gotoNo, $color );
-    foreach $line ( split /\n/, $text ) {
-        if ( $line =~ m/^---[+][+][ ]+(.+)/ ) {
-            registerLastItem( $id, $title, $type, $goto, $gotoYes, $gotoNo,
-                $color );
-            ( $id, $title, $type, $goto, $gotoYes, $gotoNo, $color ) =
-              ( '', '', 'action', '', '', '', '' );
-            $title .= $1;
-        }
+        my $stcnt = 0;
+        my $idcnt = 0;
+        my %flels = ();
+        my $startid = '';
 
-        if ( $line =~ m/^(?:\t|\s\s\s)\*\s*(.+?[^ ])\s*:\s*(.+[^ ])\s*/ )
-        {    # Isso tá errado e funciona. Merda!
-            $id      = $2 if ( lc($1) eq 'id' );
-            $type    = $2 if ( lc($1) eq 'type' );
-            $goto    = $2 if ( lc($1) eq 'goto' );
-            $gotoYes = $2 if ( lc($1) eq 'yes' );
-            $gotoNo  = $2 if ( lc($1) eq 'no' );
-            $color   = $2 if ( lc($1) eq 'color' );
-        }
-    }
-    registerLastItem( $id, $title, $type, $goto, $gotoYes, $gotoNo, $color );
-
-    my $error  = '';
-    my $svg    = &montaSVG( $topic, $web );
-    my $mapImg = &montaMapImg( $topic, $web, $percentReduce );
-    unless ( -d $myPub ) {
-        mkdir $myPub or die "can't create directory $myPub";
-    }
-    Foswiki::Func::saveFile( "$myPub/flowchart_$topic.svg",       $svg );
-    Foswiki::Func::saveFile( "$myPub/flowchartMapImg_$topic.txt", $mapImg );
-
-    my $cmd =
-      $Foswiki::cfg{Plugins}{$pluginName}{ImageMagickCmd} .   # /usr/bin/convert
-      ' %INFILE|F% -resize %PCNT|S%x%PCNT|S% %OUTFILE|F%';
-    Foswiki::Func::writeDebug("Command: $cmd") if $debug;
-    my ( $output, $status ) = Foswiki::Sandbox->sysCommand(
-        $cmd,
-        INFILE  => "$myPub/flowchart_$topic.svg",
-        PCNT    => "$percentReduce%",
-        OUTFILE => "$myPub/flowchart_$topic.png",
-    );
-
-    if ($status) {
-        Foswiki::Func::writeWarning(
-"FlowchartPlugin: error while executing 'convert' command. status: $status; output: $output"
-        );
-    }
-}
-
-sub registerLastItem {
-    use Encode;
-    my ( $id, $title, $type, $goto, $gotoYes, $gotoNo, $color ) = @_;
-    if ($title) {
-        $totItens++;
-        $id =~ s/\s*([^ ]*)\s*/$1/g;
-        $id =~ s/[^a-zA-Z0-9]/_/g;
-        $id = "fluxIten$totItens" if ( !$id );
-
-#$title = `echo $title | iconv -t utf-8`;                # convert to utf-8 by shell
-#$title = encode("utf8", decode("iso-8859-1", $title));  # convert to utf-8 from iso
-        $title = encode( "utf8", $title );   # convert to utf-8 (from anything?)
-        $fluxItens{$id} = {
-            'title'   => $title,
-            'type'    => lc $type,
-            'goto'    => $goto,
-            'gotoYes' => $gotoYes,
-            'gotoNo'  => $gotoNo,
-            'x'       => $itemPositionDefault,
-            'y'       => $itemPositionDefault,
-            'color'   => $color
-        };
-        if ( $itemPositionDefault == 1 ) {    # Yeah... this is the first item.
-            $firstItemId = $id;
-            $itemPositionDefault =
-              0    # to the other ones, the position is not defined.
-        }
-        else {
-            if (
-                $fluxItens{$lastItemId}->{'type'} =~ m/question|end|end-error/ )
-            {
-                $fluxItens{$lastItemId}->{'goto'} = '';
-                if ( lc $fluxItens{$lastItemId}->{'gotoYes'} eq 'next' ) {
-                    $fluxItens{$lastItemId}->{'gotoYes'} = $id;
-                }
-                if ( lc $fluxItens{$lastItemId}->{'gotoNo'} eq 'next' ) {
-                    $fluxItens{$lastItemId}->{'gotoNo'} = $id;
-                }
-            }
-            else {
-                my $goto = lc $fluxItens{$lastItemId}->{'goto'};
-                if ( $goto eq '' || $goto eq 'next' ) {
-                    $fluxItens{$lastItemId}->{'goto'} = $id;
-                }
-            }
-        }
-        $lastItemId = $id;
-    }
-}
-
-sub montaSVG {
-    my ( $topic, $web ) = @_;
-
-    my $svg =
-'<!-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-  <<             Created with FlowchartPlugin for Foswiki                >>
-  <<      Get it from http://foswiki.org/Extensions/FlowchartPlugin        >>
-    This flowchart was based on:
-    ' . Foswiki::Func::getViewUrl( $web, $topic ) . '
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -->';
-
-    $svg .= &encaixaItemRecursive();
-    $svg .= &linkItensRecursive();
-
-    return '<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg"'
-      . ' width="'
-      . ( $caixa{bigerPosX} * $caixa{areaX} ) . 'px"'
-      . ' height="'
-      . ( $caixa{bigerPosY} * $caixa{areaY} ) . 'px">'
-      . "\n$svg\n</svg>";
-}
-
-sub encaixaItemRecursive {
-    my $id  = $_[0];
-    my $svg = "\n";
-    if ( !$id ) {    # it is the first item
-        $id   = $firstItemId;
-        $_[1] = 1;
-        $_[2] = 1;
-    }
-    else {
-        if ( $fluxItens{$id}->{x} ) {
-            return '';    # it's already defined.
-        }
-        $fluxItens{$id}->{x} = $_[1];
-        $fluxItens{$id}->{y} = $_[2];
-    }
-    $caixa{x} =
-      $fluxItens{$id}->{x} * $caixa{areaX} -
-      ( ( $caixa{areaX} + $caixa{w} ) / 2 );
-    $caixa{y} =
-      $fluxItens{$id}->{y} * $caixa{areaY} -
-      ( ( $caixa{areaY} + $caixa{h} ) / 2 );
-    my $color = $caixa{ 'color_' . $fluxItens{$id}->{type} };
-    $color = $fluxItens{$id}->{color} if ( $fluxItens{$id}->{color} ne '' );
-    if ( $fluxItens{$id}->{type} eq 'start' ) {
-        $svg .=
-            '  <rect id="caixa_' 
-          . $id . '" x="'
-          . $caixa{x} . '" y="'
-          . $caixa{y} . '"
-        rx="' . ( $caixa{'h'} / 3 ) . '" ry="' . ( $caixa{h} / 3 ) . '"
-        width="' . $caixa{'w'} . '" height="' . $caixa{h} . '"
-        style="fill:#' . $color . ';' . $caixa{style} . '" />';
-    }
-    if ( $fluxItens{$id}->{type} eq 'action' ) {
-        $svg .=
-            '  <rect id="caixa_' 
-          . $id . '" x="'
-          . $caixa{x} . '" y="'
-          . $caixa{y} . '"
-        width="' . $caixa{'w'} . '" height="' . $caixa{h} . '"
-        style="fill:#' . $color . ';' . $caixa{style} . '" />';
-    }
-    if ( $fluxItens{$id}->{type} eq 'question' ) {
-
-        #transform="matrix(escalaX, inclinaY, inclinaX, escalaY, posX, posY)"
-        $svg .= '  <path id="caixa_' . $id . '"
-        d="M 0.4,0.0 L 0.6,0.0 L 1.0,0.3 L 1.0,0.7 L 0.6,1.0 L 0.4,1.0 L 0.0,0.7 L 0.0,0.3 L 0.4,0.0 z"
-        transform="matrix('
-          . $caixa{'w'}
-          . ', 0,0, '
-          . $caixa{'h'} . ', '
-          . $caixa{x} . ','
-          . $caixa{y} . ')"
-        style="fill:#' . $color . ';' . $caixa{style} . '" />';
-    }
-    if (   $fluxItens{$id}->{type} eq 'end'
-        || $fluxItens{$id}->{type} eq 'end-error' )
-    {
-        $svg .=
-            '  <rect id="caixa_' 
-          . $id . '" x="'
-          . $caixa{x} . '" y="'
-          . $caixa{y} . '"
-        rx="' . ( $caixa{'h'} / 3 ) . '" ry="' . ( $caixa{h} / 3 ) . '"
-        width="' . $caixa{'w'} . '" height="' . $caixa{h} . '"
-        style="fill:#' . $color . ';' . $caixa{style} . '" />';
-    }
-    $svg .= "\n"
-      . '  <text xml:space="preserve" id="text_'
-      . $id
-      . '" style="'
-      . $styleText . '">';
-    my $tilteLineX =
-      $fluxItens{$id}->{x} * $caixa{areaX} - ( $caixa{areaX} / 2 );
-    my $tilteLineY =
-      $fluxItens{$id}->{y} * $caixa{areaY} - ( $caixa{areaY} / 2 );
-    foreach $tilteLine ( split /%FLOWCHART_BR%/, $fluxItens{$id}->{title} ) {
-        $tilteLine =~ s/<nop>//g;
-        $tilteLine =~ s/^\s*([^\s].*[^\s])\s*$/$1/;
-        $svg .= "<tspan x=\"$tilteLineX\" y=\"$tilteLineY\">$tilteLine</tspan>";
-        $tilteLineY += $textSize;
-    }
-    $svg .= '</text>';
-    if ( $fluxItens{$id}->{'goto'} ne '' ) {
-        $caixa{bigerPosY} = ( $_[2] + 1 )
-          if ( $caixa{bigerPosY} < ( $_[2] + 1 ) );
-        $svg .= &encaixaItemRecursive( $fluxItens{$id}->{'goto'},
-            $_[1], ( $_[2] + 1 ) );
-    }
-    my $gotoYesAlreadyExists;
-    if ( $fluxItens{$id}->{'gotoYes'} ne '' ) {
-        $caixa{bigerPosY} = ( $_[2] + 1 )
-          if ( $caixa{bigerPosY} < ( $_[2] + 1 ) );
-        if ( $fluxItens{ $fluxItens{$id}->{'gotoYes'} }->{x} == 0 ) {
-            $gotoYesAlreadyExists = 0;
-            $svg .= &encaixaItemRecursive( $fluxItens{$id}->{'gotoYes'},
-                $_[1], ( $_[2] + 1 ) );
-        }
-        else {
-            $gotoYesAlreadyExists =
-              1;    # The next already exists. The gotoNo can go down!
-        }
-    }
-    if ( $fluxItens{$id}->{'gotoNo'} ne '' ) {
-        if ($gotoYesAlreadyExists) {
-            $svg .= &encaixaItemRecursive( $fluxItens{$id}->{'gotoNo'},
-                $_[1], ( $_[2] + 1 ) );
-        }
-        else {
-            $caixa{bigerPosX}++
-              if ( $fluxItens{ $fluxItens{$id}->{'gotoNo'} }->{x} == 0 );
-            if ( $fluxItens{ $fluxItens{$id}->{'gotoNo'} }->{x} == 0 ) {
-                $fluxItens{ $fluxItens{$id}->{'gotoNo'} }
-                  ->{'firstInTheColumn'} = 1;
-                $svg .= &encaixaItemRecursive( $fluxItens{$id}->{'gotoNo'},
-                    $caixa{bigerPosX}, $_[2] );
-            }
-        }
-    }
-    return $svg;
-}
-
-sub linkItensRecursive {
-    my $idFrom = $_[0];
-    my $svg    = "\n\n";
-
-    if ( !$idFrom ) {    # it is the first item
-        $idFrom = $firstItemId;
-    }
-
-    if ( $fluxItens{$idFrom}->{linked} ) {
-        return '';       # it's already defined.
-    }
-    $fluxItens{$idFrom}->{linked} = 1;
-
-    if (   $fluxItens{$idFrom}->{'goto'} eq ''
-        && $fluxItens{$idFrom}->{'gotoYes'} eq ''
-        && $fluxItens{$idFrom}->{'gotoNo'}  eq '' )
-    {
-        return '';       # it is the end.
-    }
-
-    # d="M Ponto1 C Guia1 Guia2 Ponto2"
-    my (
-        $iniX,      $iniY,      $endX,      $endY,     $guideIniX,
-        $guideIniY, $guideEndX, $guideEndY, $setaType, $exitBy
-    );
-    my $gotoYesExitBy;
-
-    if ( $fluxItens{$idFrom}->{'goto'} ne '' ) {
-        $idTo = $fluxItens{$idFrom}->{'goto'};
-        (
-            $iniX,      $iniY,      $endX,      $endY,     $guideIniX,
-            $guideIniY, $guideEndX, $guideEndY, $setaType, $exitBy
-        ) = &getLinkLine( $idFrom, $idTo );
-        $svg .= "  <path id=\"form_${idFrom}_to_$idTo\"
-        d=\"M $iniX,$iniY C $guideIniX,$guideIniY $guideEndX,$guideEndY $endX,$endY\"
-        style=\"$styleLinha\" />\n";
-        $svg .= '  <path id="seta_to_' . $idTo . '" d="' . $seta{$setaType} . '"
-        transform="translate('
-          . ( $endX - 5 ) . ','
-          . ( $endY - 5 )
-          . ')" style="'
-          . $seta{style} . '" />';
-        $svg .= &linkItensRecursive($idTo);
-    }
-    if ( $fluxItens{$idFrom}->{'gotoYes'} ne '' ) {
-        $idTo = $fluxItens{$idFrom}->{'gotoYes'};
-        (
-            $iniX,      $iniY,      $endX,      $endY,     $guideIniX,
-            $guideIniY, $guideEndX, $guideEndY, $setaType, $exitBy
-        ) = &getLinkLine( $idFrom, $idTo );
-        $gotoYesExitBy = $exitBy;
-        $svg .= "  <path id=\"form_${idFrom}_to_$idTo\"
-        d=\"M $iniX,$iniY C $guideIniX,$guideIniY $guideEndX,$guideEndY $endX,$endY\"
-        style=\"$styleLinha\" />\n";
-        $svg .= '  <path id="seta_to_' . $idTo . '" d="' . $seta{$setaType} . '"
-        transform="translate('
-          . ( $endX - 5 ) . ','
-          . ( $endY - 5 )
-          . ')" style="'
-          . $seta{style} . '" />';
-        $svg .=
-"\n  <circle cx=\"$iniX\" cy=\"$iniY\" r=\"2.5\" stroke=\"none\" fill=\"green\"/>";
-        $svg .= &linkItensRecursive($idTo);
-    }
-    if ( $fluxItens{$idFrom}->{'gotoNo'} ne '' ) {
-        $idTo = $fluxItens{$idFrom}->{'gotoNo'};
-        (
-            $iniX,      $iniY,      $endX,      $endY,     $guideIniX,
-            $guideIniY, $guideEndX, $guideEndY, $setaType, $exitBy
-        ) = &getLinkLine( $idFrom, $idTo );
-        if ( $exitBy eq $gotoYesExitBy ) {
-            $iniX += 5 if ( $exitBy eq 'N' || $exitBy eq 'S' );
-            $iniY -= 5 if ( $exitBy eq 'L' || $exitBy eq 'O' );
-        }
-        $svg .= "  <path id=\"form_${idFrom}_to_$idTo\"
-        d=\"M $iniX,$iniY C $guideIniX,$guideIniY $guideEndX,$guideEndY $endX,$endY\"
-        style=\"$styleLinha\" />\n";
-        $svg .= '  <path id="seta_to_' . $idTo . '" d="' . $seta{$setaType} . '"
-        transform="translate('
-          . ( $endX - 5 ) . ','
-          . ( $endY - 5 )
-          . ')" style="'
-          . $seta{style} . '" />';
-        $svg .=
-"\n  <circle cx=\"$iniX\" cy=\"$iniY\" r=\"2.5\" stroke=\"none\" fill=\"red\"/>";
-        $svg .= &linkItensRecursive($idTo);
-    }
-
-    return $svg;
-}
-
-sub getLinkLine {
-    my ( $idFrom, $idTo ) = @_;
-    my (
-        $iniX,      $iniY,      $endX,      $endY,     $guideIniX,
-        $guideIniY, $guideEndX, $guideEndY, $setaType, $exitBy
-    );
-
-    if ( $fluxItens{$idFrom}->{x} < $fluxItens{$idTo}->{x} ) {
-        if ( $fluxItens{$idFrom}->{y} == $fluxItens{$idTo}->{y} ) {    # Case 1
-            $iniX =
-              $fluxItens{$idFrom}->{x} * $caixa{areaX} -
-              ( ( $caixa{areaX} - $caixa{w} ) / 2 );
-            $iniY =
-              $fluxItens{$idFrom}->{y} * $caixa{areaY} -
-              ( $caixa{areaY} / 2 ) +
-              ( $caixa{h} / 6 );
-            $endX =
-              ( $fluxItens{$idTo}->{x} - 1 ) * $caixa{areaX} +
-              ( ( $caixa{areaX} - $caixa{w} ) / 2 );
-            $endY =
-              $fluxItens{$idFrom}->{y} * $caixa{areaY} -
-              ( $caixa{areaY} / 2 ) -
-              ( $caixa{h} / 6 );
-            if ( ( $fluxItens{$idFrom}->{x} + 1 ) == $fluxItens{$idTo}->{x} ) {
-                $guideIniX = $iniX + ( ( $caixa{areaX} - $caixa{w} ) / 2 );
-                $guideIniY = $iniY;
-                $guideEndX = $endX - ( ( $caixa{areaX} - $caixa{w} ) / 2 );
-                $guideEndY = $endY;
-            }
-            else {
-                $guideIniX = $iniX + ( $caixa{areaX} / 2 );
-                $guideIniY = $iniY + ( $caixa{areaY} / 4 );
-                $guideEndX = $endX - ( $caixa{areaX} / 2 );
-                $guideEndY = $endY - ( $caixa{areaY} / 4 );
-            }
-            $setaType = 'L';
-            $exitBy   = 'L';
-        }
-        if ( $fluxItens{$idFrom}->{y} < $fluxItens{$idTo}->{y} ) {    # Case 2
-            $iniX =
-              $fluxItens{$idFrom}->{x} * $caixa{areaX} -
-              ( ( $caixa{areaX} - $caixa{w} ) / 2 );
-            $iniY =
-              $fluxItens{$idFrom}->{y} * $caixa{areaY} -
-              ( $caixa{areaY} / 2 ) +
-              ( $caixa{h} / 6 );
-            $endX =
-              ( $fluxItens{$idTo}->{x} - 1 ) * $caixa{areaX} +
-              ( ( $caixa{areaX} - $caixa{w} ) / 2 );
-            $endY =
-              $fluxItens{$idTo}->{y} * $caixa{areaY} -
-              ( $caixa{areaY} / 2 ) -
-              ( $caixa{h} / 6 );
-            if ( ( $fluxItens{$idFrom}->{x} + 1 ) == $fluxItens{$idTo}->{x} ) {
-                $guideIniX = $endX + ( $caixa{areaX} - $caixa{w} );
-                $guideIniY = $iniY;
-                $guideEndX = $iniX - ( $caixa{areaX} - $caixa{w} );
-                $guideEndY = $endY;
-            }
-            else {
-                $guideIniX = ( $iniX + $endX ) / 2;
-                $guideIniY = $iniY;
-                $guideEndX = ( $iniX + $endX ) / 2;
-                $guideEndY = $endY;
-            }
-            $setaType = 'L';
-            $exitBy   = 'L';
-        }
-        if ( $fluxItens{$idFrom}->{y} > $fluxItens{$idTo}->{y} ) {    # Case 3
-            $iniX =
-              $fluxItens{$idFrom}->{x} * $caixa{areaX} -
-              ( $caixa{areaX} / 2 ) -
-              ( $caixa{w} / 8 );
-            $iniY =
-              ( $fluxItens{$idFrom}->{y} - 1 ) * $caixa{areaY} +
-              ( ( $caixa{areaY} - $caixa{h} ) / 2 );
-            $endX =
-              ( $fluxItens{$idTo}->{x} - 1 ) * $caixa{areaX} +
-              ( ( $caixa{areaX} - $caixa{w} ) / 2 );
-            $endY =
-              $fluxItens{$idTo}->{y} * $caixa{areaY} -
-              ( $caixa{areaY} / 2 ) -
-              ( $caixa{h} / 6 );
-            $guideIniX = $iniX;
-            $guideIniY = $iniY - $caixa{areaY};
-            $guideEndX = $endX - ( $caixa{areaX} / 2 );
-            $guideEndY = $endY;
-            $setaType  = 'L';
-            $exitBy    = 'N';
-        }
-    }
-    if ( $fluxItens{$idFrom}->{x} > $fluxItens{$idTo}->{x} ) {
-        if ( $fluxItens{$idFrom}->{y} == $fluxItens{$idTo}->{y} ) {    # Case 4
-            $iniX =
-              ( $fluxItens{$idFrom}->{x} - 1 ) * $caixa{areaX} +
-              ( ( $caixa{areaX} - $caixa{w} ) / 2 );
-            $iniY =
-              $fluxItens{$idFrom}->{y} * $caixa{areaY} -
-              ( $caixa{areaY} / 2 ) +
-              ( $caixa{h} / 6 );
-            $endX =
-              $fluxItens{$idTo}->{x} * $caixa{areaX} -
-              ( ( $caixa{areaX} - $caixa{w} ) / 2 );
-            $endY =
-              $fluxItens{$idTo}->{y} * $caixa{areaY} -
-              ( $caixa{areaY} / 2 ) -
-              ( $caixa{h} / 6 );
-            if ( ( $fluxItens{$idFrom}->{x} + 1 ) == $fluxItens{$idTo}->{x} ) {
-                $guideIniX = $iniX - ( ( $caixa{areaX} - $caixa{w} ) / 2 );
-                $guideIniY = $iniY;
-                $guideEndX = $endX + ( ( $caixa{areaX} - $caixa{w} ) / 2 );
-                $guideEndY = $endY;
-            }
-            else {
-                $guideIniX = $iniX - ( $caixa{areaX} / 2 );
-                $guideIniY = $iniY + ( $caixa{areaY} / 4 );
-                $guideEndX = $endX + ( $caixa{areaX} / 2 );
-                $guideEndY = $endY - ( $caixa{areaY} / 4 );
-            }
-            $setaType = 'O';
-            $exitBy   = 'O';
-        }
-        if ( $fluxItens{$idFrom}->{y} < $fluxItens{$idTo}->{y} ) {    # Case 5
-            $iniX =
-              ( $fluxItens{$idFrom}->{x} - 1 ) * $caixa{areaX} +
-              ( ( $caixa{areaX} - $caixa{w} ) / 2 );
-            $iniY =
-              $fluxItens{$idFrom}->{y} * $caixa{areaY} -
-              ( $caixa{areaY} / 2 ) +
-              ( $caixa{h} / 6 );
-            $endX =
-              $fluxItens{$idTo}->{x} * $caixa{areaX} -
-              ( ( $caixa{areaX} - $caixa{w} ) / 2 );
-            $endY =
-              $fluxItens{$idTo}->{y} * $caixa{areaY} -
-              ( $caixa{areaY} / 2 ) -
-              ( $caixa{h} / 6 );
-            if ( ( $fluxItens{$idFrom}->{x} - 1 ) == $fluxItens{$idTo}->{x} ) {
-                $guideIniX = $endX - ( $caixa{areaX} - $caixa{w} );
-                $guideIniY = $iniY;
-                $guideEndX = $iniX + ( $caixa{areaX} - $caixa{w} );
-                $guideEndY = $endY;
-            }
-            else {
-                $guideIniX = ( $iniX + $endX ) / 2;
-                $guideIniY = $iniY;
-                $guideEndX = ( $iniX + $endX ) / 2;
-                $guideEndY = $endY;
-            }
-            $setaType = 'O';
-            $exitBy   = 'O';
-        }
-        if ( $fluxItens{$idFrom}->{y} > $fluxItens{$idTo}->{y} ) {    # Case 6
-            if ( $fluxItens{$idFrom}->{'firstInTheColumn'} ) {
-                $iniX =
-                  $fluxItens{$idFrom}->{x} * $caixa{areaX} -
-                  ( $caixa{areaX} / 2 ) -
-                  ( $caixa{w} / 8 );
-                $iniY =
-                  ( $fluxItens{$idFrom}->{y} - 1 ) * $caixa{areaY} +
-                  ( ( $caixa{areaY} - $caixa{h} ) / 2 );
-                $guideIniX = $iniX;
-                $guideIniY = $iniY - $caixa{areaY};
-                $exitBy    = 'N';
-            }
-            else {
-                $iniX =
-                  ( $fluxItens{$idFrom}->{x} - 1 ) * $caixa{areaX} +
-                  ( ( $caixa{areaX} - $caixa{w} ) / 2 );
-                $iniY =
-                  $fluxItens{$idFrom}->{y} * $caixa{areaY} -
-                  ( $caixa{areaY} / 2 ) +
-                  ( $caixa{h} / 6 );
-                $exitBy = 'O';
-            }
-            $endX =
-              $fluxItens{$idTo}->{x} * $caixa{areaX} -
-              ( ( $caixa{areaX} - $caixa{w} ) / 2 );
-            $endY =
-              $fluxItens{$idTo}->{y} * $caixa{areaY} -
-              ( $caixa{areaY} / 2 ) -
-              ( $caixa{h} / 6 );
-            if ( !$fluxItens{$idFrom}->{'firstInTheColumn'} ) {
-                if (
-                    ( $fluxItens{$idFrom}->{x} - 1 ) == $fluxItens{$idTo}->{x} )
+        for ($jp = undef, $i = 0; $i <= $#t; ++$i)
                 {
-                    $guideIniX = $endX - ( $caixa{areaX} - $caixa{w} );
-                    $guideIniY = $iniY;
+                if ($t[$i] =~ m/^-{3}\+{2}\s*(.*?)\s*$/)
+                        {
+                        ++$idcnt;
+                        my $title = $1;
+                        $title =~ s#<a\s.*?</a>##g;
+                        $title =~ s#<[^>]+>##g;
+                        $title =~ s#^\s*(.*?)\s*$#$1#;
+                        $j = { title => $title };
+                        $k = [];
+                        for (++$i; $i <= $#t && (($l, $m) = ($t[$i] =~ m/^\s+\*\s+($reattr)\s*:\s*(.*?)\s*$/i)); )
+                                {
+                                $l = ($l =~ m/^case\s*\(\s*(.*?)\s*\)$/i) ? ('case(' . $1 . ')') : lc ($l);
+                                $j->{$l} = $m;
+                                splice (@t, $i, 1);
+                                push (@{$k}, $l) if ($l =~ m/$regoto/i);
+                                }
+                        --$i;
+                        $j->{order} = $k if (scalar (@{$k}));
+                        $j->{color} = '#' . $j->{color} if (exists ($j->{color}) && substr ($j->{color}, 0, 1) ne '#');
+                        if (exists ($j->{id}))
+                                {
+                                my $taid = sprintf ('AutoId_%d', $idcnt);
+                                map ({ $jp->{$_} = $j->{id} if (exists ($jp->{$_}) && $jp->{$_} eq $taid) } qw( yes no goto ));
+                                }
+                        else
+                                { $j->{id} = sprintf ('AutoId_%d', $idcnt); }
+                        if (exists ($j->{type}))
+                                {
+                                if ($j->{type} eq 'Question')
+                                        {
+                                        $j->{yes} = 'Next' unless (exists ($j->{yes}));
+                                        $j->{no} = 'Next' unless (exists ($j->{no}));
+                                        }
+                                elsif ($j->{type} ne 'Switch' && $j->{type} ne 'End' && $j->{type} ne 'End-Error')
+                                        { $j->{goto} = 'Next' unless (exists ($j->{goto})); }
+                                }
+                        else
+                                {
+                                $j->{type} = 'Action';
+                                $j->{goto} = 'Next' unless (exists ($j->{goto}));
+                                }
+                        map ({ $j->{$_} = sprintf ('AutoId_%d', $idcnt + 1) if (exists ($j->{$_}) && $j->{$_} eq 'Next') } qw( yes no goto ));
+                        $jp = $j;
+
+                        $title = $j->{title};
+                        $title = encode( "iso-8859-1", decode( "utf-8", $title ) ) ;
+                        $title =~ s/\"/\'/g;
+                        $title =~ s/\s+/ /g;
+
+                        if (exists ($j->{alturl}) && $j->{alturl} ne '')
+                                {
+                                if ($j->{alturl} =~ m-^(.*?)/([^/#]+)(#.*?)?$-)
+                                        {
+                                        $URL = Foswiki::Func::getViewUrl ($1, $2);
+                                        $anchor = $3 ? $3 : '';
+                                        }
+                                $j->{alturl} = $URL . $anchor;
+                                }
+                        else
+                                {
+                                $URL = Foswiki::Func::getViewUrl ($_[2], $_[1]);
+                                $anchor = Foswiki::Func::internalLink ('', $_[2], $_[1], '', $title, 0);
+                                #$bm .= '<pre><code>-' . join ('-<br />-', $_[2], $_[1], $URL, encode_entities ($anchor));
+                                # https://ecsrtwiki.emea.vzbi.com/foswiki/bin/view//System/FlowchartPluginExample
+                                if ($URL =~ m#^(.*?://.*?/)/(.*?)$#)
+                                        {
+                                        $URL = $1 . $2;
+                                        }
+                                $anchor =~ s/^.*?href="(?:[^#]+)?(#.*?)".*?$/$1/;
+                                #$bm .= '-<br />-' . join ('-<br />-', $URL, encode_entities ($anchor)) . '-</code></pre>';
+                                $j->{url} = $URL . $anchor;
+                                }
+
+                        #push (@tt, '<pre>' . Dumper ($j) . "</pre>\n");
+                        $flels{$j->{id}} = [ $j, {} ];
+                        if (lc ($j->{type}) eq 'start')
+                                {
+                                $startid = $j->{id};
+                                ++$stcnt;
+                                }
+                        }
                 }
-                else {
-                    $guideIniX = ( $iniX + $endX ) / 2;
-                    $guideIniY = $iniY;
+
+        #unshift (@t, '<pre>' . Dumper (\%flels) . "</pre>\n");
+        $jdata{$id}[1] = &make_fc_elememt_tree (\%flels, $startid);
+
+        #unshift (@t, join ('', @tt));
+        #$#tt = -1;
+        #unshift (@t, '<pre>' . to_json ($jdata{$id}, { pretty => 1 }) . "</pre>\n");
+        unshift (@t, '%JQREQUIRE{"sprintf"}%');
+        $_[0] = $bm . join ("\n", @t) . $am;
+
+        $ppfc{$id} = ($stcnt == 1) ? \%p : (($stcnt > 1) ? 'Multiple "Start" Elements are not allowed' : 'Missing "Start" Element');
+        }
+
+$fcc = 0;
+while ((($params) = ($_[0] =~ m/%FLOWCHART(?:{(.*?)})?%/s)))
+        {
+        my ($bm, $am) = ($`, $');
+        my %p = (); #defined ($params) ? Foswiki::Func::extractParameters ($params) : ();
+
+        $p{_DEFAULT} = ($params =~ m/^\s*('|")(.*?)\g1/)[1];
+        map (
+                {
+                my $v = Foswiki::Func::extractNameValuePair ($params, $_->[0]) || Foswiki::Func::getPluginPreferencesValue ($_->[1]) || $_->[2];
+                $p{$_->[0]} = $v if (defined ($v));
                 }
-            }
-            if ( ( $fluxItens{$idFrom}->{x} - 1 ) == $fluxItens{$idTo}->{x} ) {
-                $guideEndX = $iniX + ( $caixa{areaX} - $caixa{w} );
-                $guideEndY = $endY;
-            }
-            else {
-                $guideEndX = ( $iniX + $endX ) / 2;
-                $guideEndY = $endY;
-            }
-            $guideEndX = $endX + ( $caixa{areaX} / 2 );
-            $guideEndY = $endY;
-            $setaType  = 'O';
+                (
+                        [ 'text-size', 'TEXT_SIZE',    10 ],
+                        [ 'max-lines', 'MAX_LINES',     3 ],
+                        [ 'max-path',  'MAX_PATH',      3 ],
+                        [ 'item-w',    'ITEM_WIDTH',  100 ],
+                        [ 'item-h',    'ITEM_HEIGHT', undef ],
+                        [ 'area-w',    'ITEM_AREA_W', undef ],
+                        [ 'area-h',    'ITEM_AREA_H', undef ],
+                        [ 'percent',   'PERCENT_IMG', 100 ]
+                ));
+
+        if (exists ($p{'item-h'}))
+                {
+                if (exists ($p{'max-lines'}))
+                        { $p{'text-size'} = int (($p{'item-h'} - 4) / $p{'max-lines'}) - 2; }
+                else
+                        { $p{'max-lines'} = int (($p{'item-h'} - 4) / ($p{'text-size'} + 2)); }
+                }
+        else
+                { $p{'item-h'} = 4 + $p{'max-lines'} * (2 + $p{'text-size'}); }
+
+        #$bm .= '<pre>' . Dumper (\%p) . "</pre>\n";
+        my $id = exists ($p{Id}) ? $p{Id} : (exists ($p{_DEFAULT}) ? $p{_DEFAULT} : sprintf ('Flowchart_%d', ++$fcc));
+        delete ($p{_DEFAULT});
+        $jdata{$id}[0] = \%p;
+
+        if (exists ($ppfc{$id}))
+                {
+                if (ref ($ppfc{$id}) eq 'HASH')
+                        {
+                        $_[0] = $bm . '<svg id="' . $id . '" xmlns="http://www.w3.org/2000/svg" width="10px" height="10px" onload="flowchart_main (' . "'$id'" . ');"></svg>' . $am;
+                        ++$numfc;
+                        }
+                else
+                        { $_[0] = $bm . $ppfc{$id} . $am; }
+                }
+        else
+                { $_[0] = $bm . $am; }
         }
-    }
-    if ( $fluxItens{$idFrom}->{x} == $fluxItens{$idTo}->{x} ) {
-        if ( $fluxItens{$idFrom}->{y} < $fluxItens{$idTo}->{y} ) {    # Case 7
-            if ( ( $fluxItens{$idFrom}->{y} + 1 ) == $fluxItens{$idTo}->{y} )
-            {                                                         # Case 7.a
-                $iniX =
-                  $fluxItens{$idFrom}->{x} * $caixa{areaX} -
-                  ( $caixa{areaX} / 2 );
-                $iniY =
-                  $fluxItens{$idFrom}->{y} * $caixa{areaY} -
-                  ( ( $caixa{areaY} - $caixa{h} ) / 2 );
-                $endY =
-                  ( $fluxItens{$idTo}->{y} - 1 ) * $caixa{areaY} +
-                  ( ( $caixa{areaY} - $caixa{h} ) / 2 );
-                $endX      = $iniX;
-                $guideIniX = $iniX;
-                $guideIniY = $iniY;
-                $guideEndX = $endX;
-                $guideEndY = $endY;
-                $setaType  = 'S';
-                $exitBy    = 'S';
-            }
-            else
-            {  # . . . . . . . . . . . . . . . . . . . . . . . . . .  # Case 7.b
-                $iniX =
-                  $fluxItens{$idFrom}->{x} * $caixa{areaX} -
-                  ( ( $caixa{areaX} - $caixa{w} ) / 2 );
-                $iniY =
-                  $fluxItens{$idFrom}->{y} * $caixa{areaY} -
-                  ( $caixa{areaY} / 2 ) +
-                  ( $caixa{h} / 6 );
-                $endY =
-                  $fluxItens{$idTo}->{y} * $caixa{areaY} -
-                  ( $caixa{areaY} / 2 ) -
-                  ( $caixa{h} / 6 );
-                $endX      = $iniX;
-                $guideIniX = $iniX + ( $caixa{areaX} - $caixa{w} ) / 1.5;
-                $guideIniY = $iniY;
-                $guideEndX = $endX + ( $caixa{areaX} - $caixa{w} ) * 1.5;
-                $guideEndY = $endY;
-                $setaType  = 'O';
-                $exitBy    = 'L';
-            }
+
+if ($numfc)
+        {
+        my $base = '%PUBURLPATH%/%SYSTEMWEB%/FlowchartPlugin';
+
+        if (0 && $user eq '6293495480')
+                { Foswiki::Func::addToZone ('script', 'FlowchartPlugin::flowchart', "<script type='text/javascript' src='$base/flowchart_test.js'></script>"); }
+        else
+                { Foswiki::Func::addToZone ('script', 'FlowchartPlugin::flowchart', "<script type='text/javascript' src='$base/flowchart.js'></script>"); }
+
+        Foswiki::Func::addToZone ('script', 'FlowchartPlugin_flowchartdata',
+        '<script type="text/json">' . to_json (\%jdata, { pretty => 1 }) . '</script>',
+        'FlowchartPlugin::flowchart');
         }
-        if ( $fluxItens{$idFrom}->{y} > $fluxItens{$idTo}->{y} ) {    # Case 8
-            $iniX =
-              $fluxItens{$idFrom}->{x} * $caixa{areaX} -
-              ( ( $caixa{areaX} - $caixa{w} ) / 2 );
-            $iniY =
-              $fluxItens{$idFrom}->{y} * $caixa{areaY} -
-              ( $caixa{areaY} / 2 ) +
-              ( $caixa{h} / 6 );
-            $endY =
-              $fluxItens{$idTo}->{y} * $caixa{areaY} -
-              ( $caixa{areaY} / 2 ) -
-              ( $caixa{h} / 6 );
-            $endX      = $iniX;
-            $guideIniX = $iniX + ( $caixa{areaX} - $caixa{w} ) / 1.5;
-            $guideIniY = $iniY;
-            $guideEndX = $endX + ( $caixa{areaX} - $caixa{w} ) * 1.5;
-            $guideEndY = $endY;
-            $setaType  = 'O';
-            $exitBy    = 'L';
+
+}
+
+################################################################################
+
+sub make_fc_elememt_tree
+{
+my $els = shift;
+my $startid = shift;
+my ($rv, $k, $v, $e, @o, %o);
+
+my %solved = ( 'start' => 1 );
+my @st = (($rv = $els->{$startid}));
+delete ($els->{$startid});
+
+while (scalar (@st))
+        {
+        $e = shift (@st);
+        if (exists ($e->[0]{order}))
+                {
+                %o = map ({ $_ => 1 } keys (%{$e->[0]}));
+                map ({ delete ($o{$_}) } @{$e->[0]{order}});
+                @o = @{$e->[0]{order}};
+                push (@o, keys (%o));
+                }
+        else
+                { @o = keys (%{$e->[0]}); }
+
+        foreach $k (@o)
+                {
+                $v = $e->[0]{$k};
+                if ($k =~ m/^(goto|yes|no|case\s*\(.*?\))$/)
+                        {
+                        if (exists ($solved{$v}))
+                                { $e->[1]{$v} = undef; }
+                        else
+                                {
+                                push (@st, ($e->[1]{$v} = $els->{$v}));
+                                delete ($els->{$v});
+                                $solved{$v} = 1;
+                                }
+                        $solved{$v} = 1;
+                        }
+                }
         }
-    }
 
-    return (
-        $iniX,      $iniY,      $endX,      $endY,     $guideIniX,
-        $guideIniY, $guideEndX, $guideEndY, $setaType, $exitBy
-    );
+$rv;
 }
 
-sub montaMapImg {
-    my ( $topic, $web, $perReduce ) = @_;
-    $reduce = $perReduce / 100;
-    return
-        '<map name="flowchart_' 
-      . $topic . '">'
-      . &encaixaMapImg( $topic, $web, $reduce )
-      . "\n</map>";
-}
-
-sub encaixaMapImg {
-    my ( $topic, $web, $reduce, $id ) = @_;
-    my $mapImg = "\n";
-    if ( !$id ) {    # it is the first item
-        $id = $firstItemId;
-    }
-
-    if ( $fluxItens{$id}->{maped} ) {
-        return '';    # it's already defined.
-    }
-    $fluxItens{$id}->{maped} = 1;
-
-    my $URL = Foswiki::Func::getViewUrl( $web, $topic );
-    my $title = $fluxItens{$id}->{title};
-    $title =
-      encode( "iso-8859-1", decode( "utf-8", $title ) )
-      ;               # convert from utf-8 to iso
-    $title =~ s/%FLOWCHART_BR%/ /g;
-    $title =~ s/\"/\'/g;
-    $title =~ s/\s+/ /g;
-    my $anchor = $title;
-    $anchor =~ s/[^a-zA-Z0-9]/_/g;
-    $anchor =~ s/_+/_/g;
-    $anchor =~ s/(^_*|_*$)//g;
-    my $x =
-      ( $fluxItens{$id}->{x} * $caixa{areaX} -
-          ( ( $caixa{areaX} + $caixa{w} ) / 2 ) ) * $reduce;
-    my $y =
-      ( $fluxItens{$id}->{y} * $caixa{areaY} -
-          ( ( $caixa{areaY} + $caixa{h} ) / 2 ) ) * $reduce;
-    my $w = $caixa{w} * $reduce;
-    my $h = $caixa{h} * $reduce;
-    $mapImg .=
-      '  <area href="' . $URL . '#' . $anchor . '" title="' . $title . '"';
-    $mapImg .=
-        ' shape="rect" coords="' 
-      . $x . ',' 
-      . $y . ','
-      . ( $x + $w ) . ','
-      . ( $y + $h ) . '">';
-
-    if ( $fluxItens{$id}->{'goto'} ne '' ) {
-        $mapImg .=
-          &encaixaMapImg( $topic, $web, $reduce, $fluxItens{$id}->{'goto'} );
-    }
-    if ( $fluxItens{$id}->{'gotoYes'} ne '' ) {
-        $mapImg .=
-          &encaixaMapImg( $topic, $web, $reduce, $fluxItens{$id}->{'gotoYes'} );
-    }
-    if ( $fluxItens{$id}->{'gotoNo'} ne '' ) {
-        $mapImg .=
-          &encaixaMapImg( $topic, $web, $reduce, $fluxItens{$id}->{'gotoNo'} );
-    }
-
-    return $mapImg;
-}
-
-# =========================
-sub afterSaveHandler {
-### my ( $text, $topic, $web, $error ) = @_;   # do not uncomment, use $_[0], $_[1]... instead
-
-    Foswiki::Func::writeDebug(
-        "- ${pluginName}::afterSaveHandler( $_[2].$_[1] )")
-      if $debug;
-
-    my $web = $_[2];
-    $web =~ s/(\/)/\./g;
-
-    # here is the right place to create the image.
-    if ( $_[0] =~ m/%FLOWCHART%/ ) {
-        &desenhaFluxograma( $_[0], $_[1], $_[2], '' );
-    }
-    if ( $_[0] =~ m/%FLOWCHART\{([^\n]*?)\}%/ ) {
-        &desenhaFluxograma( $_[0], $_[1], $_[2], $1 );
-    }
-}
-
-# =========================
-
+################################################################################
 1;
