@@ -13,10 +13,10 @@ The items of the flowchart are defined in the following way:
 
 <verbatim>
 ---++ Item of the Flowchart
-        * Id: unique_name
-        * Type: Question
-        * Yes: item_A
-        * No: item_B
+   * Id: unique_name
+   * Type: Question
+   * Yes: item_A
+   * No: item_B
 </verbatim>
 
 A more complete example is available at [[FlowchartPlugin Example]], once the plugin is installed.
